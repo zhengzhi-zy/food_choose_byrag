@@ -6,7 +6,6 @@
 
 这是一个面向食谱 Markdown 文档的垂直领域 RAG 问答系统。系统会加载本地食谱文档，构建 FAISS 向量索引，并结合 BM25、向量检索、RRF 重排、元数据过滤和查询路由，为用户提供菜品推荐、食材查询和分步骤做法说明。
 
-本项目默认通过 OpenAI-compatible API 调用 DeepSeek，也保留了 Moonshot/Kimi 等模型服务的配置入口。API Key 只通过环境变量读取，不应写入代码或提交到 GitHub。
 
 ### 核心能力
 
@@ -104,28 +103,14 @@ python main.py
 | `temperature` | `0.1` | 生成温度 |
 | `max_tokens` | `2048` | 最大生成 token 数 |
 
-### 安全说明
 
-- 不要把真实 API Key 写入代码、README 或提交历史。
-- `.env`、`.venv`、`.idea`、`__pycache__` 和 `vector_index` 已在 `.gitignore` 中忽略。
-- `.env.example` 只保留占位符，可安全提交。
-- `vector_index` 是本地生成的索引目录，通常不需要上传到 GitHub。
 
-### 技术改写点
-
-相较原始 Datawhale All-in-RAG C8 示例，本项目做了以下轻量改写：
-
-1. 将生成模块从固定 Moonshot/Kimi 接入改为可配置的大模型接口。
-2. 默认使用 `DeepSeek API + OpenAI-compatible` 调用方式。
-3. 在配置层新增 `llm_provider`、`llm_api_key_env`、`llm_base_url`，便于切换不同模型服务商。
-4. 保留数据准备、索引构建、检索优化、生成集成四层架构。
-5. 保留父子文档、混合检索、RRF、Metadata Filter、查询路由和查询重写等核心 RAG 技术点。
 
 ## English
 
 Food Choose by RAG is a domain-specific RAG question-answering system for recipe Markdown documents. It loads local recipe files, builds a FAISS vector index, and combines BM25, vector retrieval, RRF reranking, metadata filtering, and query routing to answer recipe recommendation, ingredient, and step-by-step cooking questions.
 
-The default LLM backend is DeepSeek through an OpenAI-compatible API. Moonshot/Kimi and other compatible model providers can also be configured. API keys are read from environment variables only and should never be committed to GitHub.
+
 
 ### Features
 
@@ -223,19 +208,3 @@ Main configuration lives in `RAGConfig` inside `config.py`:
 | `temperature` | `0.1` | Generation temperature |
 | `max_tokens` | `2048` | Maximum generated tokens |
 
-### Security Notes
-
-- Do not put real API keys in code, README files, or Git history.
-- `.env`, `.venv`, `.idea`, `__pycache__`, and `vector_index` are ignored by `.gitignore`.
-- `.env.example` contains placeholders only and is safe to commit.
-- `vector_index` is generated locally and usually should not be uploaded to GitHub.
-
-### Technical Notes
-
-Compared with the original Datawhale All-in-RAG C8 example, this project adds a lightweight LLM integration rewrite:
-
-1. The generation module is configurable instead of being tied to one provider.
-2. DeepSeek is used by default through an OpenAI-compatible API.
-3. `llm_provider`, `llm_api_key_env`, and `llm_base_url` make provider switching easier.
-4. The original four-layer RAG flow is preserved: data preparation, index construction, retrieval optimization, and generation integration.
-5. Core RAG techniques are preserved, including parent-child retrieval, hybrid retrieval, RRF, metadata filters, query routing, and query rewriting.
