@@ -6,18 +6,20 @@ import os
 import logging
 from typing import List
 
-from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
-from langchain_community.chat_models.moonshot import MoonshotChat
-from langchain_openai import ChatOpenAI
-from langchain_core.documents import Document
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
+from llama_index.core import Document
+from llama_index.llms.openai_like import OpenAILike
 
 logger = logging.getLogger(__name__)
 
+
+def _get_text(doc: Document) -> str:
+    """Return text from a LlamaIndex document."""
+    return doc.get_content()
+
+
 class GenerationIntegrationModule:
     """生成集成模块 - 负责LLM集成和回答生成"""
-    
+
     def __init__(
         self,
         model_name: str = "deepseek-chat",
@@ -29,7 +31,7 @@ class GenerationIntegrationModule:
     ):
         """
         初始化生成集成模块
-        
+
         Args:
             model_name: 模型名称
             temperature: 生成温度
@@ -46,7 +48,7 @@ class GenerationIntegrationModule:
         self.base_url = base_url
         self.llm = None
         self.setup_llm()
-    
+
     def setup_llm(self):
         """初始化大语言模型"""
         logger.info(f"正在初始化LLM: provider={self.provider}, model={self.model_name}")
@@ -55,24 +57,26 @@ class GenerationIntegrationModule:
         if not api_key:
             raise ValueError(f"请设置 {self.api_key_env} 环境变量")
 
-        if self.provider == "moonshot":
-            self.llm = MoonshotChat(
-                model=self.model_name,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                moonshot_api_key=api_key
-            )
-        else:
-            self.llm = ChatOpenAI(
-                model=self.model_name,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                api_key=api_key,
-                base_url=self.base_url,
-            )
-        
+        self.llm = OpenAILike(
+            model=self.model_name,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            api_key=api_key,
+            api_base=self.base_url,
+            is_chat_model=True,
+        )
+
         logger.info("LLM初始化完成")
-    
+
+    def _complete(self, prompt: str) -> str:
+        """调用 LlamaIndex LLM 并返回文本。"""
+        return str(self.llm.complete(prompt)).strip()
+
+    def _stream_complete(self, prompt: str):
+        """流式调用 LlamaIndex LLM。"""
+        for chunk in self.llm.stream_complete(prompt):
+            yield chunk.delta or ""
+
     def generate_basic_answer(self, query: str, context_docs: List[Document]) -> str:
         """
         生成基础回答
@@ -86,29 +90,20 @@ class GenerationIntegrationModule:
         """
         context = self._build_context(context_docs)
 
-        prompt = ChatPromptTemplate.from_template("""
+        prompt = f"""
 你是一位专业的烹饪助手。请根据以下食谱信息回答用户的问题。
 
-用户问题: {question}
+用户问题: {query}
 
 相关食谱信息:
 {context}
 
 请提供详细、实用的回答。如果信息不足，请诚实说明。
 
-回答:""")
+回答:"""
 
-        # 使用LCEL构建链
-        chain = (
-            {"question": RunnablePassthrough(), "context": lambda _: context}
-            | prompt
-            | self.llm
-            | StrOutputParser()
-        )
+        return self._complete(prompt)
 
-        response = chain.invoke(query)
-        return response
-    
     def generate_step_by_step_answer(self, query: str, context_docs: List[Document]) -> str:
         """
         生成分步骤回答
@@ -122,10 +117,10 @@ class GenerationIntegrationModule:
         """
         context = self._build_context(context_docs)
 
-        prompt = ChatPromptTemplate.from_template("""
+        prompt = f"""
 你是一位专业的烹饪导师。请根据食谱信息，为用户提供详细的分步骤指导。
 
-用户问题: {question}
+用户问题: {query}
 
 相关食谱信息:
 {context}
@@ -150,18 +145,10 @@ class GenerationIntegrationModule:
 - 重点突出实用性和可操作性
 - 如果没有额外的技巧要分享，可以省略制作技巧部分
 
-回答:""")
+回答:"""
 
-        chain = (
-            {"question": RunnablePassthrough(), "context": lambda _: context}
-            | prompt
-            | self.llm
-            | StrOutputParser()
-        )
+        return self._complete(prompt)
 
-        response = chain.invoke(query)
-        return response
-    
     def query_rewrite(self, query: str) -> str:
         """
         智能查询重写 - 让大模型判断是否需要重写查询
@@ -172,8 +159,7 @@ class GenerationIntegrationModule:
         Returns:
             重写后的查询或原查询
         """
-        prompt = PromptTemplate(
-            template="""
+        prompt = f"""
 你是一个智能查询分析助手。请分析用户的查询，判断是否需要重写以提高食谱搜索效果。
 
 原始查询: {query}
@@ -203,18 +189,9 @@ class GenerationIntegrationModule:
 - "宫保鸡丁怎么做" → "宫保鸡丁怎么做"（保持原查询）
 - "红烧肉需要什么食材" → "红烧肉需要什么食材"（保持原查询）
 
-请输出最终查询（如果不需要重写就返回原查询）:""",
-            input_variables=["query"]
-        )
+请输出最终查询（如果不需要重写就返回原查询）:"""
 
-        chain = (
-            {"query": RunnablePassthrough()}
-            | prompt
-            | self.llm
-            | StrOutputParser()
-        )
-
-        response = chain.invoke(query).strip()
+        response = self._complete(prompt)
 
         # 记录重写结果
         if response != query:
@@ -223,8 +200,6 @@ class GenerationIntegrationModule:
             logger.info(f"查询无需重写: '{query}'")
 
         return response
-
-
 
     def query_router(self, query: str) -> str:
         """
@@ -236,7 +211,7 @@ class GenerationIntegrationModule:
         Returns:
             路由类型 ('list', 'detail', 'general')
         """
-        prompt = ChatPromptTemplate.from_template("""
+        prompt = f"""
 根据用户的问题，将其分类为以下三种类型之一：
 
 1. 'list' - 用户想要获取菜品列表或推荐，只需要菜名
@@ -252,16 +227,9 @@ class GenerationIntegrationModule:
 
 用户问题: {query}
 
-分类结果:""")
+分类结果:"""
 
-        chain = (
-            {"query": RunnablePassthrough()}
-            | prompt
-            | self.llm
-            | StrOutputParser()
-        )
-
-        result = chain.invoke(query).strip().lower()
+        result = self._complete(prompt).lower()
 
         # 确保返回有效的路由类型
         if result in ['list', 'detail', 'general']:
@@ -311,27 +279,19 @@ class GenerationIntegrationModule:
         """
         context = self._build_context(context_docs)
 
-        prompt = ChatPromptTemplate.from_template("""
+        prompt = f"""
 你是一位专业的烹饪助手。请根据以下食谱信息回答用户的问题。
 
-用户问题: {question}
+用户问题: {query}
 
 相关食谱信息:
 {context}
 
 请提供详细、实用的回答。如果信息不足，请诚实说明。
 
-回答:""")
+回答:"""
 
-        chain = (
-            {"question": RunnablePassthrough(), "context": lambda _: context}
-            | prompt
-            | self.llm
-            | StrOutputParser()
-        )
-
-        for chunk in chain.stream(query):
-            yield chunk
+        yield from self._stream_complete(prompt)
 
     def generate_step_by_step_answer_stream(self, query: str, context_docs: List[Document]):
         """
@@ -346,10 +306,10 @@ class GenerationIntegrationModule:
         """
         context = self._build_context(context_docs)
 
-        prompt = ChatPromptTemplate.from_template("""
+        prompt = f"""
 你是一位专业的烹饪导师。请根据食谱信息，为用户提供详细的分步骤指导。
 
-用户问题: {question}
+用户问题: {query}
 
 相关食谱信息:
 {context}
@@ -373,35 +333,27 @@ class GenerationIntegrationModule:
 - 不要强行填充无关内容
 - 重点突出实用性和可操作性
 
-回答:""")
+回答:"""
 
-        chain = (
-            {"question": RunnablePassthrough(), "context": lambda _: context}
-            | prompt
-            | self.llm
-            | StrOutputParser()
-        )
-
-        for chunk in chain.stream(query):
-            yield chunk
+        yield from self._stream_complete(prompt)
 
     def _build_context(self, docs: List[Document], max_length: int = 2000) -> str:
         """
         构建上下文字符串
-        
+
         Args:
             docs: 文档列表
             max_length: 最大长度
-            
+
         Returns:
             格式化的上下文字符串
         """
         if not docs:
             return "暂无相关食谱信息。"
-        
+
         context_parts = []
         current_length = 0
-        
+
         for i, doc in enumerate(docs, 1):
             # 添加元数据信息
             metadata_info = f"【食谱 {i}】"
@@ -411,14 +363,14 @@ class GenerationIntegrationModule:
                 metadata_info += f" | 分类: {doc.metadata['category']}"
             if 'difficulty' in doc.metadata:
                 metadata_info += f" | 难度: {doc.metadata['difficulty']}"
-            
+
             # 构建文档文本
-            doc_text = f"{metadata_info}\n{doc.page_content}\n"
-            
+            doc_text = f"{metadata_info}\n{_get_text(doc)}\n"
+
             # 检查长度限制
             if current_length + len(doc_text) > max_length:
                 break
-            
+
             context_parts.append(doc_text)
             current_length += len(doc_text)
         divider = "\n" + "="*50 + "\n"

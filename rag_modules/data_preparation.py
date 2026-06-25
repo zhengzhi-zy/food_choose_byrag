@@ -7,11 +7,17 @@ import hashlib
 from pathlib import Path
 from typing import List, Dict, Any
 
-from langchain_text_splitters import MarkdownHeaderTextSplitter
-from langchain_core.documents import Document
+from llama_index.core import Document
+from llama_index.core.schema import TextNode
 import uuid
 
 logger = logging.getLogger(__name__)
+
+
+def _get_text(doc: Document | TextNode) -> str:
+    """Return text from a LlamaIndex document/node."""
+    return doc.get_content()
+
 
 class DataPreparationModule:
     """数据准备模块 - 负责数据加载、清洗和预处理"""
@@ -39,7 +45,7 @@ class DataPreparationModule:
         """
         self.data_path = data_path
         self.documents: List[Document] = []  # 父文档（完整食谱）
-        self.chunks: List[Document] = []     # 子文档（按标题分割的小块）
+        self.chunks: List[TextNode] = []     # 子文档（按标题分割的小块）
         self.parent_child_map: Dict[str, str] = {}  # 子块ID -> 父文档ID的映射
     
     def load_documents(self) -> List[Document]:
@@ -71,7 +77,7 @@ class DataPreparationModule:
 
                 # 创建Document对象
                 doc = Document(
-                    page_content=content,
+                    text=content,
                     metadata={
                         "source": str(md_file),
                         "parent_id": parent_id,
@@ -112,7 +118,7 @@ class DataPreparationModule:
         doc.metadata['dish_name'] = file_path.stem
 
         # 分析难度等级
-        content = doc.page_content
+        content = _get_text(doc)
         if '★★★★★' in content:
             doc.metadata['difficulty'] = '非常困难'
         elif '★★★★' in content:
@@ -136,7 +142,7 @@ class DataPreparationModule:
         """对外提供支持的难度标签列表"""
         return cls.DIFFICULTY_LABELS
     
-    def chunk_documents(self) -> List[Document]:
+    def chunk_documents(self) -> List[TextNode]:
         """
         Markdown结构感知分块
 
@@ -157,38 +163,53 @@ class DataPreparationModule:
                 # 如果没有chunk_id（比如分割失败的情况），则生成一个
                 chunk.metadata['chunk_id'] = str(uuid.uuid4())
             chunk.metadata['batch_index'] = i  # 在当前批次中的索引
-            chunk.metadata['chunk_size'] = len(chunk.page_content)
+            chunk.metadata['chunk_size'] = len(_get_text(chunk))
 
         self.chunks = chunks
         logger.info(f"Markdown分块完成，共生成 {len(chunks)} 个chunk")
         return chunks
 
-    def _markdown_header_split(self) -> List[Document]:
+    def _split_markdown_by_headers(self, text: str) -> List[str]:
+        """按 Markdown #/##/### 标题切分，并保留标题行。"""
+        chunks = []
+        current_lines = []
+
+        for line in text.splitlines():
+            stripped = line.lstrip()
+            is_header = (
+                stripped.startswith("# ")
+                or stripped.startswith("## ")
+                or stripped.startswith("### ")
+            )
+
+            if is_header and current_lines:
+                chunk_text = "\n".join(current_lines).strip()
+                if chunk_text:
+                    chunks.append(chunk_text)
+                current_lines = []
+
+            current_lines.append(line)
+
+        final_text = "\n".join(current_lines).strip()
+        if final_text:
+            chunks.append(final_text)
+
+        return chunks or [text]
+
+    def _markdown_header_split(self) -> List[TextNode]:
         """
         使用Markdown标题分割器进行结构化分割
 
         Returns:
             按标题结构分割的文档列表
         """
-        # 定义要分割的标题层级
-        headers_to_split_on = [
-            ("#", "主标题"),      # 菜品名称
-            ("##", "二级标题"),   # 必备原料、计算、操作等
-            ("###", "三级标题")   # 简易版本、复杂版本等
-        ]
-
-        # 创建Markdown分割器
-        markdown_splitter = MarkdownHeaderTextSplitter(
-            headers_to_split_on=headers_to_split_on,
-            strip_headers=False  # 保留标题，便于理解上下文
-        )
-
         all_chunks = []
 
         for doc in self.documents:
             try:
                 # 检查文档内容是否包含Markdown标题
-                content_preview = doc.page_content[:200]
+                doc_text = _get_text(doc)
+                content_preview = doc_text[:200]
                 has_headers = any(line.strip().startswith('#') for line in content_preview.split('\n'))
 
                 if not has_headers:
@@ -196,39 +217,40 @@ class DataPreparationModule:
                     logger.debug(f"内容预览: {content_preview}")
 
                 # 对每个文档进行Markdown分割
-                md_chunks = markdown_splitter.split_text(doc.page_content)
+                md_chunk_texts = self._split_markdown_by_headers(doc_text)
 
-                logger.debug(f"文档 {doc.metadata.get('dish_name', '未知')} 分割成 {len(md_chunks)} 个chunk")
+                logger.debug(f"文档 {doc.metadata.get('dish_name', '未知')} 分割成 {len(md_chunk_texts)} 个chunk")
 
                 # 如果没有分割成功，说明文档可能没有标题结构
-                if len(md_chunks) <= 1:
+                if len(md_chunk_texts) <= 1:
                     logger.warning(f"文档 {doc.metadata.get('dish_name', '未知')} 未能按标题分割，可能缺少标题结构")
 
                 # 为每个子块建立与父文档的关系
                 parent_id = doc.metadata["parent_id"]
 
-                for i, chunk in enumerate(md_chunks):
+                for i, chunk_text in enumerate(md_chunk_texts):
                     # 为子块分配唯一ID
                     child_id = str(uuid.uuid4())
 
                     # 合并原文档元数据和新的标题元数据
-                    chunk.metadata.update(doc.metadata)
-                    chunk.metadata.update({
+                    chunk_metadata = dict(doc.metadata)
+                    chunk_metadata.update({
                         "chunk_id": child_id,
                         "parent_id": parent_id,
                         "doc_type": "child",  # 标记为子文档
                         "chunk_index": i      # 在父文档中的位置
                     })
+                    chunk = TextNode(text=chunk_text, metadata=chunk_metadata, id_=child_id)
 
                     # 建立父子映射关系
                     self.parent_child_map[child_id] = parent_id
 
-                all_chunks.extend(md_chunks)
+                    all_chunks.append(chunk)
 
             except Exception as e:
                 logger.warning(f"文档 {doc.metadata.get('source', '未知')} Markdown分割失败: {e}")
                 # 如果Markdown分割失败，将整个文档作为一个chunk
-                all_chunks.append(doc)
+                all_chunks.append(TextNode(text=_get_text(doc), metadata=dict(doc.metadata)))
 
         logger.info(f"Markdown结构分割完成，生成 {len(all_chunks)} 个结构化块")
         return all_chunks
@@ -303,7 +325,7 @@ class DataPreparationModule:
                 'dish_name': doc.metadata.get('dish_name'),
                 'category': doc.metadata.get('category'),
                 'difficulty': doc.metadata.get('difficulty'),
-                'content_length': len(doc.page_content)
+                'content_length': len(_get_text(doc))
             })
         
         with open(output_path, 'w', encoding='utf-8') as f:
@@ -311,7 +333,7 @@ class DataPreparationModule:
         
         logger.info(f"元数据已导出到: {output_path}")
 
-    def get_parent_documents(self, child_chunks: List[Document]) -> List[Document]:
+    def get_parent_documents(self, child_chunks: List[TextNode]) -> List[Document]:
         """
         根据子块获取对应的父文档（智能去重）
 
