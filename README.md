@@ -6,7 +6,7 @@
 
 这是一个基于 LlamaIndex 的食谱 Markdown 文档垂直领域 RAG 问答系统。系统会加载本地食谱文档，构建 FAISS 向量索引，并结合 BM25、向量检索、RRF 重排、元数据过滤和查询路由，为用户提供菜品推荐、食材查询和分步骤做法说明。
 
-本项目默认通过 OpenAI-compatible API 调用 DeepSeek，也可通过配置切换到其他 OpenAI-compatible 模型服务。API Key 只通过环境变量读取，不应写入代码或提交到 GitHub。
+本项目默认通过 OpenAI-compatible API 调用 DeepSeek，也可通过配置切换到其他 OpenAI-compatible 模型服务。API Key 只通过环境变量读取。
 
 ### 核心能力
 
@@ -110,7 +110,7 @@ python main.py
 
 Food Choose by RAG is a LlamaIndex-based domain-specific RAG question-answering system for recipe Markdown documents. It loads local recipe files, builds a FAISS vector index, and combines BM25, vector retrieval, RRF reranking, metadata filtering, and query routing to answer recipe recommendation, ingredient, and step-by-step cooking questions.
 
-The default LLM backend is DeepSeek through an OpenAI-compatible API. Other OpenAI-compatible model providers can also be configured. API keys are read from environment variables only and should never be committed to GitHub.
+The default LLM backend is DeepSeek through an OpenAI-compatible API. Other OpenAI-compatible model providers can also be configured. 
 
 ### Features
 
